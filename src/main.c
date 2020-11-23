@@ -17,14 +17,17 @@
  */
 
 #include "cowmail_server-config.h"
+#include "libcowmail.h"
 #include <gio/gio.h>
+#include <nettle/sha2.h>
 
 
 
 typedef struct {
-  gchar *head;
-  gchar *body;
-} message;
+  guchar *head;
+  guchar *body;
+  gsize   size;
+} cowmail_item;
 
 
 
@@ -34,88 +37,98 @@ GMutex table_lock;
 
 
 static void
-store_message (gchar *head,
-               gchar *body)
+list_messages (GOutputStream *ostream)
 {
-  gchar *key = g_compute_checksum_for_string (G_CHECKSUM_SHA256, body, -1);
-  message *msg = g_new (message, 1);
-  msg->head = strdup (head);
-  msg->body = strdup (body);
-
-  g_print ("Storing: [%s] [%s] -> [%s]\n", head, body, key);
+  g_autoptr (GError) error = NULL;
   g_mutex_lock (&table_lock);
-  g_hash_table_insert (table, key, msg);
-  g_mutex_unlock (&table_lock);
-}
-
-
-
-static gchar *
-get_message (gchar *hash)
-{
-  g_mutex_lock (&table_lock);
-  message *msg = g_hash_table_lookup (table, hash);
-  g_hash_table_remove (table, hash);
-  g_mutex_unlock (&table_lock);
-  gchar *text = g_strconcat (msg->body, "\n", NULL);
-  g_free (msg->head);
-  g_free (msg->body);
-  g_free (msg);
-  return text;
-}
-
-
-
-static gchar *
-list_messages ()
-{
-  g_mutex_lock (&table_lock);
-  GHashTableIter iter;
-  g_hash_table_iter_init (&iter, table);
-  gchar *k;
-  message *v;
-  GString *buf = g_string_new (NULL);
-  while (g_hash_table_iter_next (&iter, (void **) &k, (void **) &v)) {
-    buf = g_string_append (buf, v->head);
-    buf = g_string_append (buf, "\n");
+  g_print ("COWMAIL DEBUG: list_message(): %u messages in list.\n", g_hash_table_size (table));
+  gint c = 0;
+  for (GList *item = g_hash_table_get_values(table); item; item = item->next) {
+    g_output_stream_write (ostream, ((cowmail_item *) item->data)->head, COWMAIL_HEAD_SIZE, NULL, &error);
+    if (error) {
+      g_printerr("LIST: Breaking loop because of ERROR in round %d: %s\n", c, error->message);
+      break;
+    }
+    c++;
   }
   g_mutex_unlock (&table_lock);
-  // TODO: free GString
-  return buf->str;
-}
-
-
-
-static gchar *
-process_message (gchar *data)
-{
-  gchar *ret = NULL;
-  gchar **msg = g_strsplit_set (data, " \n", 4);
-  if (!g_strcmp0 (msg[0], "LIST")) {
-    g_print ("LIST command: [%s]\n", msg[0]);
-    ret = list_messages ();
-  } else if (!g_strcmp0 (msg[0], "GET") && msg[1]) {
-    g_print ("GET command: [%s] [%s]\n", msg[0], msg[1]);
-    ret = get_message (msg[1]);
-  } else if (!g_strcmp0 (msg[0], "PUT") && msg[1] && msg[2]) {
-    g_print ("PUT command: [%s] [%s] [%s]\n", msg[0], msg[1], msg[2]);
-    store_message (msg[1], msg[2]);
-  } else {
-    g_printerr ("Invalid command: [%s]\n", msg[0]);
-  }
-  g_strfreev (msg);
-  return ret;
 }
 
 
 
 static void
-send_messages (GDataOutputStream *ostream,
-               const gchar       *msg)
+get_message (GOutputStream *ostream,
+             const guchar  *hash)
 {
-  g_print ("Sending: [%s]\n", msg);
-  g_data_output_stream_put_string (ostream, msg, NULL, NULL);
+  g_autoptr (GError) error = NULL;
 
+  g_mutex_lock (&table_lock);
+  cowmail_item *item = g_hash_table_lookup (table, hash);
+  if (!item) {
+    g_printerr ("COWMAIL ERROR: Item not found.");
+    return;
+  }
+  g_output_stream_write (ostream, item->body, item->size, NULL, &error);
+  if (error)
+    g_printerr ("GET ERROR: %s\n", error->message);
+  g_hash_table_remove (table, hash);
+  g_mutex_unlock (&table_lock);
+
+  g_free (item->body);
+  g_free (item->head);
+  g_free (item);
+}
+
+
+
+static void
+put_message (const guchar *data,
+             gsize         size)
+{
+  const guchar *body = data + COWMAIL_HEAD_SIZE;
+
+  cowmail_item *item = g_new (cowmail_item, 1);
+  item->head = g_memdup (data, COWMAIL_HEAD_SIZE);
+  item->size = size - COWMAIL_HEAD_SIZE;
+  item->body = g_memdup (body, item->size);
+
+  struct sha256_ctx sha;
+  guchar *hash = g_malloc (COWMAIL_KEY_SIZE);
+  sha256_init (&sha);
+  sha256_update (&sha, item->size, body);
+  sha256_digest (&sha, COWMAIL_KEY_SIZE, hash);
+
+  g_mutex_lock (&table_lock);
+  g_hash_table_insert (table, hash, item);
+  g_mutex_unlock (&table_lock);
+}
+
+
+
+static void
+process_request (GOutputStream *ostream,
+                 const guchar  *data,
+                 size_t         dsize)
+{
+  if (dsize == 1) {
+    g_print ("LIST command. Byte: [%02x]\n", *data);
+    list_messages (ostream);
+    return;
+  }
+  if (dsize == COWMAIL_KEY_SIZE) {
+    g_autofree gchar *hash = g_base64_encode (data, COWMAIL_KEY_SIZE);
+    g_print ("GET command. Hash: [%s]\n", hash);
+    get_message (ostream, data);
+    return;
+  }
+  if (dsize > COWMAIL_HEAD_SIZE + COWMAIL_TAG_SIZE) {
+    g_autofree gchar *head = g_base64_encode (data, COWMAIL_HEAD_SIZE);
+    g_print ("PUT command with size %" G_GSIZE_FORMAT ". Head: [%s]\n", dsize, head);
+    put_message (data, dsize);
+    return;
+  }
+  g_printerr ("ERROR: Invalid cowmail command.\n");
+  return;
 }
 
 
@@ -130,25 +143,35 @@ incoming_cb (GSocketService    *service,
   g_assert_null (user_data);
   G_IS_SOCKET_SERVICE (service);
 
-  GError *error = NULL;
-  GDataInputStream *dstream = g_data_input_stream_new (g_io_stream_get_input_stream (G_IO_STREAM (connection)));
-  GDataOutputStream *ostream = g_data_output_stream_new (g_io_stream_get_output_stream (G_IO_STREAM (connection)));
-  char *buf = NULL;
+  g_autoptr (GError) error = NULL;
+  GInputStream *istream = g_io_stream_get_input_stream (G_IO_STREAM (connection));
+  GOutputStream *ostream = g_io_stream_get_output_stream (G_IO_STREAM (connection));
 
-  if ((buf = g_data_input_stream_read_line_utf8 (dstream, NULL, NULL, &error))) {
-    gchar *msg = process_message (buf);
-    if (msg)
-      send_messages (ostream, msg);
-    g_free (buf);
+  guchar *request = g_malloc (65536);
+  size_t size = g_input_stream_read (istream, request, 65536, NULL, &error);
+  if (!error) {
+    process_request (ostream, request, size);
+  } else {
+    g_printerr ("ERROR: %s\n", error->message);
   }
-
-  if (!g_io_stream_close (G_IO_STREAM (connection), NULL, &error)) {
-    g_error ("Connection closing problem: %s\n", error->message);
-  }
-
-  g_object_unref (ostream);
-  g_object_unref (dstream);
   return FALSE;
+}
+
+
+
+guint
+cowmail_key_hash (gconstpointer *key)
+{
+  return *((guint *) key);
+}
+
+
+
+gboolean
+cowmail_key_equal (gconstpointer *key1,
+                   gconstpointer *key2)
+{
+  return !(memcmp (key1, key2, COWMAIL_KEY_SIZE));
 }
 
 
@@ -181,7 +204,9 @@ main (gint   argc,
     return EXIT_SUCCESS;
   }
 
-  table = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+  g_print ("cowmail server version %s started.\n", PACKAGE_VERSION);
+
+  table = g_hash_table_new_full ((GHashFunc) cowmail_key_hash, (GEqualFunc) cowmail_key_equal, NULL, NULL);
 
   GSocketService *service = g_threaded_socket_service_new (-1);
   GSocketListener *listener = G_SOCKET_LISTENER (service);
