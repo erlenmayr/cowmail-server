@@ -41,7 +41,6 @@ list_messages (GOutputStream *ostream)
 {
   g_autoptr (GError) error = NULL;
   g_mutex_lock (&table_lock);
-  g_print ("COWMAIL DEBUG: list_message(): %u messages in list.\n", g_hash_table_size (table));
   gint c = 0;
   for (GList *item = g_hash_table_get_values(table); item; item = item->next) {
     g_output_stream_write (ostream, ((cowmail_item *) item->data)->head, COWMAIL_HEAD_SIZE, NULL, &error);
