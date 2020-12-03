@@ -158,7 +158,7 @@ incoming_cb (GSocketService    *service,
 
 
 
-guint
+static guint
 cowmail_key_hash (gconstpointer *key)
 {
   return *((guint *) key);
@@ -166,7 +166,7 @@ cowmail_key_hash (gconstpointer *key)
 
 
 
-gboolean
+static gboolean
 cowmail_key_equal (gconstpointer *key1,
                    gconstpointer *key2)
 {
