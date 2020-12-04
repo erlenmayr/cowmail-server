@@ -122,7 +122,7 @@ process_request (GOutputStream *ostream,
   }
   if (dsize > COWMAIL_HEAD_SIZE + COWMAIL_TAG_SIZE) {
     g_autofree gchar *head = g_base64_encode (data, COWMAIL_HEAD_SIZE);
-    g_print ("PUT command with size %" G_GSIZE_FORMAT ". Head: [%s]\n", dsize, head);
+    g_print ("PUT command. Message of size %" G_GSIZE_FORMAT ". Head: [%s]\n", dsize - COWMAIL_HEAD_SIZE, head);
     put_message (data, dsize);
     return;
   }
