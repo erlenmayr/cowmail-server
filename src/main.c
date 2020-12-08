@@ -64,7 +64,7 @@ get_message (GOutputStream *ostream,
   g_mutex_lock (&table_lock);
   cowmail_item *item = g_hash_table_lookup (table, hash);
   if (!item) {
-    g_printerr ("COWMAIL ERROR: Item not found.");
+    g_printerr ("COWMAIL ERROR: Item not found.\n");
     return;
   }
   g_output_stream_write (ostream, item->body, item->size, NULL, &error);
