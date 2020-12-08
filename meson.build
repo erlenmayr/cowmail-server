@@ -1,6 +1,6 @@
 project('cowmail-server', 'c',
           version: '0.2.0',
-    meson_version: '>= 0.50.0',
+    meson_version: '>= 0.49.0',
   default_options: [ 'warning_level=2',
                      'c_std=gnu11',
                    ],

@@ -4,7 +4,7 @@ cowmail_server_sources = [
 
 cowmail_server_deps = [
   dependency('gio-2.0'),
-  dependency('nettle', version: '>= 3.6'),
+  dependency('nettle', version: '>= 3.0'),
 ]
 
 cowmail_test_sources = [
@@ -13,7 +13,7 @@ cowmail_test_sources = [
 
 cowmail_test_deps = [
   dependency('gio-2.0'),
-  dependency('nettle', version: '>= 3.6'),
+  dependency('nettle', version: '>= 3.0'),
 ]
 
 executable('cowmail-server', cowmail_server_sources,
@@ -21,7 +21,7 @@ executable('cowmail-server', cowmail_server_sources,
   install: true,
 )
 
-executable('cowmail-tests', cowmail_test_sources,
+executable('tests', cowmail_test_sources,
   dependencies: cowmail_test_deps,
   install: false,
 )
