@@ -42,7 +42,7 @@ list_messages (GOutputStream *ostream)
   g_autoptr (GError) error = NULL;
   g_mutex_lock (&table_lock);
   gint c = 0;
-  for (GList *item = g_hash_table_get_values(table); item; item = item->next) {
+  for (GList *item = g_hash_table_get_values (table); item; item = item->next) {
     g_output_stream_write (ostream, ((cowmail_item *) item->data)->head, COWMAIL_HEAD_SIZE, NULL, &error);
     if (error) {
       g_printerr("LIST: Breaking loop because of ERROR in round %d: %s\n", c, error->message);
@@ -96,6 +96,9 @@ put_message (const guchar *data,
   sha256_init (&sha);
   sha256_update (&sha, item->size, body);
   sha256_digest (&sha, COWMAIL_KEY_SIZE, hash);
+
+  g_autofree gchar *h = g_base64_encode (hash, COWMAIL_KEY_SIZE);
+  g_print ("PUT: Storing message with hash: [%s]\n", h);
 
   g_mutex_lock (&table_lock);
   g_hash_table_insert (table, hash, item);
